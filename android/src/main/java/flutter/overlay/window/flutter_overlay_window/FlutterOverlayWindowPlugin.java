@@ -36,7 +36,8 @@ public class FlutterOverlayWindowPlugin implements
     private Context context;
     private Activity mActivity;
     private BasicMessageChannel<Object> messenger;
-    private Result pendingResult;
+    // Yalnız requestPermission sonucunu tutar.
+    private Result pendingPermissionResult;
     final int REQUEST_CODE_FOR_OVERLAY_PERMISSION = 1248;
 
     @Override
@@ -53,14 +54,27 @@ public class FlutterOverlayWindowPlugin implements
     @RequiresApi(api = Build.VERSION_CODES.N)
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
-        pendingResult = result;
         if (call.method.equals("checkPermission")) {
             result.success(checkOverlayPermission());
         } else if (call.method.equals("requestPermission")) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (mActivity == null) {
+                    result.error("NO_ACTIVITY", "requestPermission requires a foreground activity", null);
+                    return;
+                }
+                if (pendingPermissionResult != null) {
+                    pendingPermissionResult.success(checkOverlayPermission());
+                }
+                pendingPermissionResult = result;
                 Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
                 intent.setData(Uri.parse("package:" + mActivity.getPackageName()));
-                mActivity.startActivityForResult(intent, REQUEST_CODE_FOR_OVERLAY_PERMISSION);
+                try {
+                    mActivity.startActivityForResult(intent, REQUEST_CODE_FOR_OVERLAY_PERMISSION);
+                } catch (RuntimeException e) {
+                    // Ayar ekranı açılamadı; sistemin yine göndereceği sonuç onActivityResult'ta yutulur.
+                    pendingPermissionResult = null;
+                    result.success(checkOverlayPermission());
+                }
             } else {
                 result.success(true);
             }
@@ -192,7 +206,10 @@ public class FlutterOverlayWindowPlugin implements
     @Override
     public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == REQUEST_CODE_FOR_OVERLAY_PERMISSION) {
-            pendingResult.success(checkOverlayPermission());
+            // Süreç ayar ekranındayken öldüyse bekleyen istek yoktur; sonuç yutulur.
+            Result r = pendingPermissionResult;
+            pendingPermissionResult = null;
+            if (r != null) r.success(checkOverlayPermission());
             return true;
         }
         return false;
